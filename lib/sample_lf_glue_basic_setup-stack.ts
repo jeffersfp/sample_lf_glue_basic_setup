@@ -15,7 +15,7 @@ import {
     CfnDataCatalogEncryptionSettings, CfnTable,
 } from "aws-cdk-lib/aws-glue";
 import {
-    ArnPrincipal, ServicePrincipal, ManagedPolicy, PolicyDocument, PolicyStatement, Effect, CfnRole,
+    ArnPrincipal, CfnRole,
 } from "aws-cdk-lib/aws-iam";
 import {
     CfnDataLakeSettings, CfnPermissions, CfnResource,
@@ -27,6 +27,8 @@ import {
     CfnWorkGroup,
 } from "aws-cdk-lib/aws-athena";
 
+import 'dotenv/config';
+
 export class SampleLfGlueBasicSetupStack extends cdk.Stack {
     constructor(scope: Construct, id: string, props?: cdk.StackProps) {
         super(scope, id, props);
@@ -36,12 +38,20 @@ export class SampleLfGlueBasicSetupStack extends cdk.Stack {
         /////////////////////////////////////////////////////
         /////////////////////////////////////////////////////
         /////////////////////////////////////////////////////
-        /// Security
+        /// IAM Roles and Principals
 
-        const identityCenterAdminRoleArn = new ArnPrincipal(`arn:aws:iam::${this.account}:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_AdministratorAccess_af0216baa3ed1cb1`)
+        const lakeFormationAdminRoleArn = process.env.LF_ADMIN_ROLE_ARN || '';
+        if (!lakeFormationAdminRoleArn) {
+            throw new Error('LF_ADMIN_ROLE_ARN environment variable is not set');
+        }
 
         const lfServiceRoleArn = `arn:${this.partition}:iam::${this.account}:role/aws-service-role/lakeformation.amazonaws.com/AWSServiceRoleForLakeFormationDataAccess`;
 
+        // Create Lake Formation Service Role with necessary permissions.
+        // Must use the Low-level CfnRole construct as there is no higher-level construct
+        // for adding the sts:SetContext action to the assume role policy, which is required
+        // for trusted identity propagation.
+        // See: https://docs.aws.amazon.com/en_us/singlesignon/latest/userguide/tip-tutorial-lf.html
         const lakeFormationServiceRole = new CfnRole(this, 'LakeFormationServiceRole', {
             assumeRolePolicyDocument: {
                 Version: '2012-10-17',
@@ -102,12 +112,10 @@ export class SampleLfGlueBasicSetupStack extends cdk.Stack {
         });
 
         const lfAdmins = [
-            identityCenterAdminRoleArn,
+            new ArnPrincipal(lakeFormationAdminRoleArn),
             new ArnPrincipal(lakeFormationServiceRole.attrArn),
             new ArnPrincipal(Fn.sub((this.synthesizer as DefaultStackSynthesizer).cloudFormationExecutionRoleArn)),
         ];
-
-
         /////////////////////////////////////////////////////
         /////////////////////////////////////////////////////
         /////////////////////////////////////////////////////
@@ -396,7 +404,7 @@ export class SampleLfGlueBasicSetupStack extends cdk.Stack {
                 },
             },
             dataLakePrincipal: {
-                dataLakePrincipalIdentifier: identityCenterAdminRoleArn.arn,
+                dataLakePrincipalIdentifier: lakeFormationAdminRoleArn,
             },
         });
         databasePermission.addDependency(glueDatabase.node.defaultChild as CfnResource);
@@ -417,7 +425,7 @@ export class SampleLfGlueBasicSetupStack extends cdk.Stack {
                 },
             },
             dataLakePrincipal: {
-                dataLakePrincipalIdentifier: identityCenterAdminRoleArn.arn,
+                dataLakePrincipalIdentifier: lakeFormationAdminRoleArn,
             },
         });
         customersTablePermission.addDependency(customersTable);
@@ -439,7 +447,7 @@ export class SampleLfGlueBasicSetupStack extends cdk.Stack {
                 },
             },
             dataLakePrincipal: {
-                dataLakePrincipalIdentifier: identityCenterAdminRoleArn.arn,
+                dataLakePrincipalIdentifier: lakeFormationAdminRoleArn,
             },
         });
         ordersTablePermission.addDependency(ordersTable);
@@ -466,6 +474,7 @@ export class SampleLfGlueBasicSetupStack extends cdk.Stack {
         /////////////////////////////////////////////////////
         /// Athena WorkGroup
 
+        // TODO: Make it work with Lake Formation and Identity Center
         new CfnWorkGroup(this, 'ReadOnlyWorkGroup', {
             name: 'ReadOnly',
             workGroupConfiguration: {
